@@ -1,0 +1,146 @@
+#!/usr/bin/env python
+# Author: Dan Shumaker 
+# LICENSE: MIT
+# Created: 2011
+#
+# Project Stats
+#
+# Generates SQL code that will have file sizes, lines of code, file name, extension, and file type printed out for each file in the source directory given.
+#
+# The SQL code can then be loaded into MySQL (Sequel Pro) for browsing and investigating purposes.  This quickly lets you view the statistics for lines of code in a project.
+# By exporting the statistics into a MySQL database it makes it more versitile than an Excel spreadsheet or a text file in my opinion.
+
+import optparse,sys,os,re, time, mimetypes, subprocess 
+import operator
+
+def analyze( options ):
+    directory = options.directory
+    verbose = options.verbose
+    dfiles = {}
+    ignoreList = options.ignoreList
+    doneTime = float(0.0)
+    firsttime = time.time()
+    total = 0
+    previousLine= ""
+    for root, dirs, files in os.walk( directory ):
+        if ".svn" in dirs:
+            dirs.remove('.svn')
+        if "CVS" in dirs:
+            dirs.remove('CVS')
+        if ".git" in dirs:
+            dirs.remove('.git')
+        for file in files:
+            for ignoreExt in ignoreList: 
+                if re.search(".*."+ignoreExt+"$", file):
+                    files.remove(file)
+        for file in files:
+            total += 1
+            pstring = "%s %-30.30s" % (total, file)
+            if not options.quiet:
+                if total == 1:
+                    print pstring,
+                elif total == 2:
+                    print "\b"*(len(previousLine)+1),pstring,
+                    #print (len(previousLine)),pstring
+                else:
+                    print "\b"*(len(previousLine)+2),pstring,
+
+            base, ext = os.path.splitext(file)
+            abFile = os.path.join(root, file)
+            dfiles[total]  = {'ext':ext,  'file': abFile, 'lines':0, 'type':'', 'size':0}
+            filetype =  subprocess.Popen(["file", '-L', abFile], stdout=subprocess.PIPE).stdout.read()
+            dfiles[total]['type'] =  filetype.split(':')[1].strip() 
+            dfiles[total]['lines'] = getLineNumbers( abFile, dfiles[total]['type'] )
+            dfiles[total]['size'] = os.path.getsize( abFile );
+            previousLine = pstring 
+    return dfiles
+
+def istext(type):
+    return (re.search(r'.* text', type) is not None)
+
+def getLineNumbers( file, type ):
+    if istext( type ):
+        fo = open(file, 'r')
+        i = len(fo.readlines())
+        fo.close()
+        return i
+    else:
+        return 0
+
+def sql_print_schema(options):
+    print ""
+    schema = '''DROP TABLE IF EXISTS `%s`; CREATE TABLE `%s` (
+  `file_id` int(10) NOT NULL COMMENT 'File ID',
+  `path` varchar(256) NOT NULL COMMENT 'File Path',
+  `size` int(10) NOT NULL COMMENT 'File Size in Bytes',
+  `lines` int(10) NOT NULL COMMENT 'Number of Lines in the file if text based',
+  `type` varchar(20) DEFAULT NULL COMMENT 'The file TYPE - not necessary',
+  `extension` varchar(20) DEFAULT NULL COMMENT 'The file extension - not necessary',
+  PRIMARY KEY (`file_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 COMMENT='File Information';
+''' % (options.table_name, options.table_name)
+    myprint( schema, options.logfile)
+
+def sql_print_stats_query(options):
+    query='''DROP TABLE IF EXISTS `%s`; CREATE TABLE `%s` SELECT CONCAT(table_schema, '.', table_name), table_rows rows, data_length DATA,index_length idx, data_length + index_length     total_size, index_length / data_length idxfrac
+FROM   information_schema.TABLES
+ORDER  BY data_length + index_length DESC
+LIMIT  20;''' % (options.query_table_name, options.query_table_name)
+    myprint( query, options.logfile)
+
+def sql_print( data, options ):
+    print ""
+    for i in data:
+        myprint( "INSERT INTO `%s` VALUES (%d, '%s', %d, %d, '%s', '%s');" %  (options.table_name, i, data[i]['file'], data[i]['size'], data[i]['lines'], data[i]['type'], data[i]['ext'].strip('.')), options.logfile)
+
+def sql_print_extension_query(options):
+    query='''DROP TABLE IF EXISTS `%s`; CREATE TABLE `%s` SELECT SUM(sf.lines) tot, sf.type, sf.extension
+FROM   `%s` sf
+GROUP BY sf.extension
+ORDER BY tot DESC;''' % (options.extension_table_name, options.extension_table_name, options.table_name)
+    myprint( query, options.logfile)
+
+def sql_print_type_query(options):
+    query='''DROP TABLE IF EXISTS `%s`; CREATE TABLE `%s` SELECT SUM(sf.lines) tot, sf.type, sf.extension
+FROM   `%s` sf
+GROUP BY sf.type
+ORDER BY tot DESC;''' % (options.type_table_name, options.type_table_name, options.table_name)
+    myprint( query, options.logfile)
+
+def myprint( string, file=sys.stdout):
+    print >> file, string
+
+if __name__ == "__main__":
+
+    us=""" 
+
+    Example 1. This will run the script, output the SQL commands to the XXMY_PROJ.sql file, then load that file into the my_db database in mysql - this is the one stop shop
+
+    proj_stats -l XXMY_PROJ.sql ; mysql -uroot -proot my_db < XXMY_PROJ.sql
+
+    """
+    dd=""" analyze the file types and total lines of a project. """
+
+    parser = optparse.OptionParser(usage=us, description= dd, add_help_option=True)
+
+    parser.add_option("-i", "--ignore", dest="ignoreList", help="Specify the types of files to ignore.", default=[])
+    parser.add_option("-d", "--directory",  dest="directory", help="Directory to analyze", default= os.getcwd() )
+    parser.add_option("-v", "--verbose",  action="store_true", dest="verbose", help="print verbose output")
+    parser.add_option("-l", "--logfile",  dest="logfile", help="Logfile" )
+    parser.add_option("-t", "--table",  dest="table_name", help="Files Sizes Table Name", default='PROJ_STATS_FILE_SIZES' )
+    parser.add_option("-q", "--query-table",  dest="query_table_name", help="Twenty largest MYSQL tables table name", default='PROJ_STATS_MYSQL_TABLE_SIZES' )
+    parser.add_option("-e", "--extension-table",  dest="extension_table_name", help="Extension File Table Name", default='PROJ_STATS_FILE_SIZES_BY_EXTENSION' )
+    parser.add_option("-y", "--type-table",  dest="type_table_name", help="Type File Table Name", default='PROJ_STATS_FILE_SIZES_BY_TYPE' )
+    parser.add_option("-n", "--quiet",  action="store_true", dest="quiet", help="Do NOT print process output")
+
+    (options, args) = parser.parse_args( )
+
+    if options.logfile:
+        options.logfile = open(options.logfile, 'w')
+
+    data = analyze( options )
+    sql_print_schema(options)
+    sql_print(data, options)  
+    sql_print_stats_query(options);
+    sql_print_extension_query(options);
+    sql_print_type_query(options);
