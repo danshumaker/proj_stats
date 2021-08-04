@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# Author: Dan Shumaker 
+# Author: Dan Shumaker
 # LICENSE: MIT
 # Created: 2011
 #
@@ -10,7 +10,7 @@
 # The SQL code can then be loaded into MySQL (Sequel Pro) for browsing and investigating purposes.  This quickly lets you view the statistics for lines of code in a project.
 # By exporting the statistics into a MySQL database it makes it more versitile than an Excel spreadsheet or a text file in my opinion.
 
-import optparse,sys,os,re, time, mimetypes, subprocess 
+import optparse,sys,os,re, time, mimetypes, subprocess
 import operator
 
 def analyze( options ):
@@ -22,7 +22,7 @@ def analyze( options ):
     firsttime = time.time()
     total = 0
     previousLine= ""
-    for root, dirs, files in os.walk( directory ):
+    for root, dirs, files in os.walk( directory, onerror=None, followlinks=False ):
         if ".svn" in dirs:
             dirs.remove('.svn')
         if "CVS" in dirs:
@@ -30,12 +30,14 @@ def analyze( options ):
         if ".git" in dirs:
             dirs.remove('.git')
         for file in files:
-            for ignoreExt in ignoreList: 
+            for ignoreExt in ignoreList:
                 if re.search(".*."+ignoreExt+"$", file):
                     files.remove(file)
+            if os.path.islink(os.path.join(root,file)):
+                files.remove(file)
         for file in files:
             total += 1
-            pstring = "%s %-30.30s" % (total, file)
+            pstring = "%s %-230.230s" % (total, os.path.join(root,file))
             if not options.quiet:
                 if total == 1:
                     print pstring,
@@ -49,10 +51,10 @@ def analyze( options ):
             abFile = os.path.join(root, file)
             dfiles[total]  = {'ext':ext,  'file': abFile, 'lines':0, 'type':'', 'size':0}
             filetype =  subprocess.Popen(["file", '-L', abFile], stdout=subprocess.PIPE).stdout.read()
-            dfiles[total]['type'] =  filetype.split(':')[1].strip() 
+            dfiles[total]['type'] =  filetype.split(':')[1].strip()
             dfiles[total]['lines'] = getLineNumbers( abFile, dfiles[total]['type'] )
             dfiles[total]['size'] = os.path.getsize( abFile );
-            previousLine = pstring 
+            previousLine = pstring
     return dfiles
 
 def istext(type):
@@ -112,7 +114,7 @@ def myprint( string, file=sys.stdout):
 
 if __name__ == "__main__":
 
-    us=""" 
+    us="""
 
     Example 1. This will run the script, output the SQL commands to the XXMY_PROJ.sql file, then load that file into the my_db database in mysql - this is the one stop shop
 
@@ -140,7 +142,7 @@ if __name__ == "__main__":
 
     data = analyze( options )
     sql_print_schema(options)
-    sql_print(data, options)  
+    sql_print(data, options)
     sql_print_stats_query(options);
     sql_print_extension_query(options);
     sql_print_type_query(options);
